@@ -23,6 +23,16 @@ public class Menu {
 
     private Boolean enabled;
 
+    private List<Role> roles;
+
+    public List<Role> getRoles() {
+        return roles;
+    }
+
+    public void setRoles(List<Role> roles) {
+        this.roles = roles;
+    }
+
     public String getParentId() {
         return parentId;
     }

@@ -16,11 +16,19 @@
   <sql id="Base_Column_List" >
     id, name, phone, telephone, address, enabled, username, password, userface, remark
   </sql>
+  <select id="getHrRolesById" resultType="org.javaboy.vhr.model.Role">
+    select
+	    r.*
+    from hr_role hrr
+    inner join role r
+    on hrr.rid = r.id
+    where hrr.hrid = #{id}
+  </select>
   <select id="loadUserByUsername" resultMap="BaseResultMap">
     select * from hr where username = #{username}
   </select>
   <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
-    select 
+    select
     <include refid="Base_Column_List" />
     from hr
     where id = #{id,jdbcType=INTEGER}
