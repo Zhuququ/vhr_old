@@ -1,0 +1,372 @@
+1. Hr类实现 UserDetails接口
+	1.1 实现方法
+		①isAccountNonExpired返回true
+		②isAccountNonLocked返回true
+		③isCredentialsNonExpired返回true
+		④isEnabled返回enabled属性
+		⑤getAuthorities方法实现待定
+
+2. 新建HrService实现 UserDetailsService接口（@Service）
+	@Service
+	public class HrService implements UserDetailsService {
+		@Autowired
+		HrMapper hrMapper;
+		
+		@Override
+		public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+			Hr hr = hrMapper.loadUserByUsername(username);
+			if (hr == null) {
+				// 用户不存在场合，抛出异常
+				throw new UsernameNotFoundException("用户不存在");
+			}
+			return hr;
+		}
+	}
+
+2.1 HrMapper.xml中添加Sql loadUserByUsername
+	<select id="loadUserByUsername" resultMap="BaseResultMap">
+		select * from hr where username = #{username}
+	</select>
+	
+	BaseResultMap即包含Hr类所有属性的ResultMap
+
+3. 新建SecurityConfig继承 WebSecurityConfigurerAdapter类（@Configuration）
+	@Configuration
+	public class SecurityConfig extends WebSecurityConfigurerAdapter {
+	
+		@Autowired
+		HrService hrService;
+		
+		// 注入Password加密
+		@Bean
+		PasswordEncoder passwordEncoder() {
+			return new BCryptPasswordEncoder();
+		}
+		
+		@Override
+		public void configure(WebSecurity web) throws Exception {
+			// 如果访问 /login 页面，直接进入，不用进行security拦截
+			web.ignoring().antMatchers("/login");
+		}
+		
+		@Override
+		protected void configure(AuthenticationManagerBuilder auth) throw Exception {
+			// 绑定步骤2中新建的Service
+			auth.userDetailsService(hrService);
+		}
+		
+		@Override
+		protected void configure (HttpSecurity http) throws Exception {
+			// 所有请求都需要认证
+			http.authorizeRequests()
+				.anyRequest().authenticated()
+				.and()
+				.formLogin()
+				// 登录页面：Form表单中的username/passwor的name
+				// 默认登录是使用Form提交，也可以改写成用JSON请求
+				.usernameParameter("username")
+				.passwordParameter("password")
+				// 进行登录页面Form提交后操作的URL
+				.loginProcessingUrl("/doLogin")
+				.loginPage("/login")
+				// 登录成功
+				.successHandler(new AuthenticationSuccessHandler() {
+					@Override
+					public void onAuthenticationSuccess(HttpServletRequest req, HttpServletResponse resp, Authentication auth) throws IOException, ServletException {
+						// 成功的场合，往resp中写状态,msg及登录的用户信息
+						// ①设置Content Type
+						resp.setContentType("application/json;charset=utf-8");
+						// ②获取登录后的用户对象
+						Hr hr = ((Hr) auth.getPrincipal());
+						// ③防止前端拿到password,将password设置为null
+						hr.setPassword(null);
+						// ④设置Resp对象的属性
+						RespBean respBean = RespBean.ok("登录成功！", hr);
+						// ⑤将RespBean对象转化为字符串
+						String s = new ObjectMapper().writeValueAsString(respBean);
+						PrintWriter out = resp.getWriter();
+						out.write(s);
+						out.flush();
+						out.close();
+					}
+				})
+				.failureHandler(new AuthenticationFailureHandler() {
+					@Override
+					public void onAuthenticationFailure(HttpServletRequest req, HttpServletResponse resp, AuthenticationException exception) throws IOException, ServletException{
+						// 处理登录失败的Resp
+						// ①设置Content Type
+						resp.setContentType("application/json;charset=utf-8");
+						// ②设置Resp对象的属性
+						RespBean respBean = RespBean.error("登录失败！");
+						// ③对异常进行判断
+						if (exception instanceof LockedException) {
+							respBean.setMsg("账号被锁定，请联系管理员！");
+						} else if (exception instanceof CredentialsExpiredException) {
+							respBean.setMsg("密码过期，请联系管理员！");
+						} else if (exception instanceof AccountExpiredException) {
+							respBean.setMsg("账号过期，请联系管理员！");
+						} else if (exception instanceof DisabledException) {
+							respBean.setMsg("账号被禁用，请联系管理员！");
+						} else if (exception instanceof BadCredentialsException) {
+							respBean.setMsg("用户名或者密码输入错误，请重新输入！");
+						}
+						// ④将RespBean对象转化为字符串
+						String s = new ObjectMapper().writeValueAsString(respBean);
+						PrintWriter out = resp.getWriter();
+						out.write(s);
+						out.flush();
+						out.close();
+					}
+				})
+				.permitAll()
+				.and()
+				.logout()
+				.logoutSuccessHandler(new LogoutSuccessHandler() {
+					@Override
+					public void onLogoutSuccess(HttpServletRequest req, HttpServletResponse resp, Authentication auth) throws IOException, ServletException {
+						// ①设置Content Type
+						resp.setContentType("application/json;charset=utf-8");
+						// ②设置Resp对象的属性
+						RespBean respBean = RespBean.ok("注销成功！");
+						// ③将RespBean对象转化为字符串
+						String s = new ObjectMapper().writeValueAsString(respBean);
+						PrintWriter out = resp.getWriter();
+						out.write(s);
+						out.flush();
+						out.close();
+					}
+				})
+				.permitAll()
+				.and()
+				.crsf().disable();
+		}
+	}
+
+4. 新建一个ResponseBean，便于管理Response状态,message以及返回的内容
+	public class RespBean {
+		private Integer status;
+		private String msg;
+		private Object obj;
+		
+		public static RespBean ok(String msg) {
+			return new RespBean(200, msg, null);
+		}
+		
+		public static RespBean ok(String msg, Object obj) {
+			return new RespBean(200,msg, obj);
+		}
+		
+		public static RespBean error(String msg) {
+			return new RespBean(500, msg, null);
+		}
+		
+		public static RespBean error(String msg, Object obj) {
+			return new RespBean(500, msg, obj);
+		}
+		
+		private RespBean() {}
+		
+		private RespBean(Integer status, String msg, Object obj) {
+			this.status = status;
+			this.msg = msg;
+			this.obj = obj;
+		}
+		
+		// getter/setter
+	}
+
+5. 新建MenuRoleFilterInvocationSecurityMetadataSource继承 FilterInvocationSecurityMetadataSource（@Component）
+→返回Menu所需的角色
+	@Component
+	public class MenuRoleFilterInvocationSecurityMetadataSource implements FilterInvocationSecurityMetadataSource {
+	
+		@Autowired
+		MenuService menuService;
+		
+		AntPathMatcher antPathMatcher = new AntPathMatcher();
+	
+		@Override
+		public Collection<ConfigAttribute> getAttributes(Object object) throws IllegalArgumentException {
+			// 获取请求地址
+			String requestUrl = ((FilterInvovation) object).getRequestUrl();
+			// 获取数据库中Menu-Role数据
+			List<Menu> menus = menuService.getAllMenusWithRole();
+			for (Menu menu : menus) {
+				// URL匹配
+				if (antPathMatcher.match(menu.getUrl(), requestUrl)) {
+					// 如果当前请求地址与数据库中的地址匹配的话
+					// 将当前请求地址（即菜单Menu）对应的角色（Role的name属性）返回
+					List<Role> roles = menu.getRoles();
+					String[] rolesStr = new String[roles.size()];
+					for (int i = 0; i < roles.size(); i++) {
+						rolesStr[i] = roles.get(i).getName();
+					}
+					return SecurityConfig.createList(rolesStr);
+				}
+			}
+			// 如果没有匹配的上的话，只要登录了就可以访问
+			// →ROLE_LOGIN用于后续的判断
+			return SecurityConfig.createList("ROLE_LOGIN");
+		}
+	
+		@Override
+		public Collection<ConfigAttribute> getAllConfigAttributes() {
+			return null;
+		}
+		
+		@Override
+		public boolean supports(Class<?> clazz) {
+			// 返回true
+			return true;
+		}
+	}
+	
+5.1 新建Meta类
+	public class Meta {
+		private Boolean keepAlive;
+		
+		private Boolean requireAuth;
+		
+		// getter/setter
+	}
+	
+5.2 新建 MenuService（@Service）
+@Service
+public class MenuService {
+	@Autowired
+	MenuMapper menuMapper;
+	
+	// 实际应用中，因为Menu-Role的关系不会频繁发生变化，所以可以使用缓存（使用Redis），避免多次与数据库进行访问
+	// @Cacheable
+	public List<Menu> getAllMenusWithRole() {
+		return menuMapper.getAllMenusWithRole();
+	}
+}
+
+5.2.1 在Menu类中，将属性 keepAlive和requireAuth 换成 Meta
+	private Meta meta;
+	
+5.2.2 在Menu类中，添加属性 roles
+	private List<Role> roles;
+	
+5.2.3 修改一下 MenuMapper.xml中 Meta和List<Role> 的数据结构
+	<resultMap id="BaseResultMap" type="org.javaboy.vhr.model.Menu">
+        <id column="id" property="id" jdbcType="INTEGER"/>
+        <result column="url" property="url" jdbcType="VARCHAR"/>
+        <result column="path" property="path" jdbcType="VARCHAR"/>
+        <result column="component" property="component" jdbcType="VARCHAR"/>
+        <result column="name" property="name" jdbcType="VARCHAR"/>
+        <result column="iconCls" property="iconCls" jdbcType="VARCHAR"/>
+        <result column="parentId" property="parentId" jdbcType="INTEGER"/>
+        <result column="enabled" property="enabled" jdbcType="BIT"/>
+		<!-- 一对一 Menu-Meta-->
+		<assocaition property="meta" javaType="org.javaboy.vhr.model.Meta">
+			<result column="keepAlive" property="keepAlive" jdbcType="BIT" />
+			<result column="requireAuth" property="requireAuth" jdbcType="BIT" />
+		</assocaition>
+	</resultMap>
+	
+5.3 在MenuMapper.xml中添加Sql getAllMenusWithRole
+	<resultMap id="MenuWithRole" type="org.javaboy.vhr.model.Menu" extends="BaseResultMap">
+		<!-- 一对一 Menu-Roles-->
+		<collection property="roles" ofType="org.javaboy.vhr.model.Role">
+			<!-- column是抽出字段名 property是类中属性名 -->
+			<id column="rid" property="id" jdbcType="INTEGER">
+			<result column="rname" property="name" jdbcType="VARCHAR">
+			<result column="rnameZh" property="nameZh" jdbcType="VARCHAR">
+		</collection>
+	</resultMap>
+	
+	<select id="getAllMenusWithRole" resultMap="MenuWithRole">
+		select
+			m.*,
+			r.id as rid,
+			r.name as rname,
+			r.nameZh as rnameZh
+		from menu menu
+		inner join menu_role mr
+		on m.id = mr.mid
+		inner join role r
+		on mr.rid = r.id
+		order by m.id
+	</select>
+
+6. 新建MenuAccessDecisionManager继承 AccessDecisionManager(@Component)
+	@Component
+	public class MenuAccessDecisionManager implements AccessDecisionManager {
+		
+		@Override
+		// Collection<ConfigAttribute>即 MenuWithRowFilter中getAttributes()的返回值（ROLES字符串数组）
+		public void decide(Authentication auth, Object object, Collection<ConfigAttrubute> configAttributes) throws AccessDeniedException, InsufficientAuthenticationException {
+			// 循环当前访问地址所需的角色
+			for (ConfigAttribute configAttribute : configAttributes) {
+				// 获取所需的角色信息（当前请求地址所需的角色之一）
+				String needRole = configAttribute.getAttribute();
+				// 如果是未匹配的上的情况（即只要登录就可访问）
+				if ("ROLE_LOGIN".equals(needRole)) {
+					// 如果当前用户是匿名的状态
+					if (auth instanceof AnonymousAuthenticationToken) {
+						throw new AccessDeniedException("尚未登录，请先登录！");
+					} else {
+						// 已登录状态则可以访问
+						return;
+					}
+				}
+				// 获取当前登录用户的角色
+				Collection<? extends GrantedAuthority> authorities = auth.getAuthorities();
+				for (GrantedAuthority authority : authorities) {
+					if (authority.getAuthority().equals(needRole)) {
+						// 如果当前用户的角色之一和当前所需角色匹配，则可访问
+						return;
+					}
+				}
+			}
+			// 以上情况都不满足的情况（需要登录以及对应角色）
+			throw new AccessDeniedException("权限不足，请联系管理员！");
+		}
+		
+		@Override
+		public boolean supports(ConfigAttribute attribute) {
+			// 返回true
+			return true;
+		}
+		
+		@Override
+		public boolean supports(Class<?> clazz) {
+			// 返回true
+			return true;
+		}
+	}
+
+6.1 实现 Hr类 中getAuthorities方法
+	@Override
+	public Collection<? extends GrantedAuthority> getAuthorities() {
+		List<SimpleGrantedAuthority> authorities = new ArrayList<>(roles.size());
+		for (Role role : roles) {
+			authorities.add(new SimpleGrantedAuthority(role.getName()));
+		}
+		return authorities;
+	}
+	
+7. 修改 SecurityConfig
+7.1 自动装配 MenuRoleFilterInvocationSecurityMetadataSource，MenuAccessDecisionManager
+	@Autowired
+    MenuRoleFilterInvocationSecurityMetadataSource menuRoleFilterInvocationSecurityMetadataSource;
+
+    @Autowired
+    MenuAccessDecisionManager menuAccessDecisionManager;
+7.2 修改权限管理
+	7.2.1 去掉 anyRequest().authenticated()
+	7.2.2 改为
+		http.authorizeRequests()
+			// 将 MenuRoleFilterInvocationSecurityMetadataSource和MenuAccessDecisionManager配置到security中
+			.withObjectPostProcessor(new ObjectPostProcessor<FilterSecurityInterceptor>() {
+				@Override
+				public <O extends FilterSecurityInterceptor> O postProcess(O object) {
+					object.setAccessDecisionManager(menuAccessDecisionManager);
+					object.setSecurityMetadataSource(menuRoleFilterInvocationSecurityMetadataSource);
+					return object;
+				}
+			})
+			.and()
+			...
