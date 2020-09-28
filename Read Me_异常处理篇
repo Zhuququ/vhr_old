@@ -1,0 +1,15 @@
+1. 关于数据库异常
+   ①使用注解 @RestControllerAdvice 统一处理rest接口的异常信息
+   ①使用注解 @ExceptionHandler 定义要处理的异常类型
+   
+	@RestControllerAdvice
+	public class GlobalExceptionHandler {
+	
+		@ExceptionHandler(SQLException.class)
+		public RespBean sqlException(SQLException e) {
+			if (e instanceof SQLIntegrityConstraintViolationException) {
+				return RespBean.error("该数据有关联数据，操作失败！");
+			}
+			return RespBean.error("数据库异常，操作失败！");
+		}
+	}
